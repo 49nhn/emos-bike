@@ -1,0 +1,143 @@
+version: '3.7'
+
+services:
+  bike-web:
+    image: emos/bike-web:latest
+    container_name: bike-web
+    hostname: bike-web
+    build:
+      context: ../../
+      dockerfile: src/Emos.Bike.Web/Dockerfile.local
+    environment:
+      - ASPNETCORE_URLS=https://+:443;http://+:80;
+      - Kestrel__Certificates__Default__Path=/root/certificate/localhost.pfx
+      - Kestrel__Certificates__Default__Password=7d90b8ca-aab2-48fd-80f5-d3c70463f023
+      - App__SelfUrl=https://localhost:44353
+      - AuthServer__RequireHttpsMetadata=false
+      - AuthServer__IsContainerized=true
+      - AuthServer__Authority=https://localhost:44334/
+      - RemoteServices__Default__BaseUrl=http://bike-api
+      - RemoteServices__AbpAccountPublic__BaseUrl=http://bike-authserver
+      - AuthServer__MetaAddress=http://bike-authserver
+      - Redis__Configuration=redis
+    ports:
+      - "44353:443"
+    depends_on:
+      - bike-api
+    restart: on-failure
+    volumes:
+      - ./certs:/root/certificate
+    networks:
+      - abp-network
+
+  bike-api:
+    image: emos/bike-api:latest
+    container_name: bike-api
+    hostname: bike-api
+    build:
+      context: ../../
+      dockerfile: src/Emos.Bike.HttpApi.Host/Dockerfile.local
+    environment:
+      - ASPNETCORE_URLS=https://+:443;http://+:80;
+      - Kestrel__Certificates__Default__Path=/root/certificate/localhost.pfx
+      - Kestrel__Certificates__Default__Password=7d90b8ca-aab2-48fd-80f5-d3c70463f023
+      - App__SelfUrl=https://localhost:44354
+      - App__HealthCheckUrl=http://bike-api/health-status
+      - AuthServer__RequireHttpsMetadata=false
+      - AuthServer__Authority=http://bike-authserver
+      - ConnectionStrings__Default=Data Source=sql-server;Initial Catalog=Bike;User Id=sa;Password=myPassw0rd;MultipleActiveResultSets=true;TrustServerCertificate=True;
+      - Redis__Configuration=redis
+    ports:
+      - "44354:443"
+    depends_on:
+      sql-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    volumes:
+      - ./certs:/root/certificate
+    networks:
+      - abp-network
+  
+  bike-authserver:
+    image: emos/bike-authserver:latest
+    container_name: bike-authserver
+    build:
+      context: ../../
+      dockerfile: src/Emos.Bike.AuthServer/Dockerfile.local
+    environment:
+      - ASPNETCORE_URLS=https://+:443;http://+:80;
+      - App__SelfUrl=https://localhost:44334
+      - App__CorsOrigins=https://localhost:44353,https://localhost:44354
+      - AuthServer__RequireHttpsMetadata=false
+      - AuthServer__Authority=http://bike-authserver
+      - Kestrel__Certificates__Default__Path=/root/certificate/localhost.pfx
+      - Kestrel__Certificates__Default__Password=7d90b8ca-aab2-48fd-80f5-d3c70463f023
+      - ConnectionStrings__Default=Data Source=sql-server;Initial Catalog=Bike;User Id=sa;Password=myPassw0rd;MultipleActiveResultSets=true;TrustServerCertificate=True;
+      - Redis__Configuration=redis
+    ports:
+      - "44334:443"
+    depends_on:
+      sql-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    volumes:
+      - ./certs:/root/certificate
+    networks:
+      - abp-network
+
+  
+  db-migrator:
+    image: emos/bike-db-migrator:latest
+    container_name: db-migrator
+    build:
+      context: ../../
+      dockerfile: src/Bike.DbMigrator/Dockerfile.local
+    environment:
+      - OpenIddict__Applications__Bike_Web__RootUrl=https://localhost:44353
+      - OpenIddict__Applications__Bike_Swagger__RootUrl=https://localhost:44354
+      - ConnectionStrings__Default=Data Source=sql-server;Initial Catalog=Bike;User Id=sa;Password=myPassw0rd;MultipleActiveResultSets=true;TrustServerCertificate=True;
+      - Redis__Configuration=redis
+    depends_on:
+      sql-server:
+        condition: service_healthy
+    networks:
+      - abp-network
+  
+  sql-server:
+    container_name: sql-server
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    ports:
+      - "1434:1433"
+    environment:
+      SA_PASSWORD: "myPassw0rd"
+      ACCEPT_EULA: "Y"
+    volumes:
+      - sqldata:/var/opt/mssql
+    networks:
+      - abp-network
+    healthcheck:
+      test: /opt/mssql-tools/bin/sqlcmd -S sql-server -U sa -P "myPassw0rd" -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+  redis:
+    container_name: redis
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - abp-network
+    healthcheck:
+      test: ["CMD", "redis-cli","ping"]
+volumes:
+  sqldata:
+    name: bike_sqldata
+networks:
+  abp-network:
+    name: bike-network
+    driver: bridge
